@@ -1,0 +1,1 @@
+this directory scripts that contain rollback actions in case if some patch should be removed
