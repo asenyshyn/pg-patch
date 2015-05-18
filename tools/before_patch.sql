@@ -81,7 +81,7 @@ DECLARE
            and pl.lanname NOT IN ('c','internal')
            and ns.nspname NOT LIKE 'pg_%'
            and ns.nspname <> 'information_schema'
-           and p.proname NOT IN ('my_id','my_account_id','my_default_storage_id')
+           and p.proname NOT IN ('function_used_as_field_default')
          ORDER BY p.proisagg DESC, ns.nspname  -- aggregates first !
   LOOP
       RAISE NOTICE 'about to drop function: %', vt_curstmt;
