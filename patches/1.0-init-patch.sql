@@ -13,7 +13,7 @@ DECLARE
      */
      -- patch name should be the same as file name
     vt_patch_name CONSTANT TEXT   := '1.0-init-patch';
-    vt_author     CONSTANT TEXT   := 'Andriy Senyshyn (sam@maytech.net)';  -- Patch author
+    vt_author     CONSTANT TEXT   := 'Andriy Senyshyn <asenyshyn@gmail.com>';  -- Patch author
 
     -- ! PUT REQUIRED PATCHES HERE
     va_depend_on           TEXT[] := ARRAY[]::TEXT[];
@@ -23,15 +23,24 @@ DECLARE
 BEGIN
 
     -- try to register patch, skip if already applied
-    IF NOT _v.register_patch(vt_patch_name, vt_author, va_depend_on) THEN
+    IF NOT _v.register_patch(vt_patch_name, vt_author, va_depend_on) THEN(sam@maytech.net)
         RETURN;
     END IF;
 
     -- ## patch fuctionality start here  ##
 
-    /*
-     *   This is a dummy patch to indicate database version.
-     */
+
+    CREATE TABLE public.demo_table (
+        id bigserial PRIMARY KEY,
+        val1 integer,
+        val2 text
+    );
+
+    -- initial data
+    INSERT INTO demo_table(val1, val2) VALUES(1,'a');
+    INSERT INTO demo_table(val1, val2) VALUES(2,'b');
+    INSERT INTO demo_table(val1, val2) VALUES(3,'c');
+    INSERT INTO demo_table(val1, val2) VALUES(4,'d');
 
     -- ## patch functionality ends here  ##
 

@@ -1,5 +1,3 @@
-/* Patch template */
-
 /*
  * Do not change this code except lines containing patch name, author name
  * and lines between ## patch functionality start, functionality end.
@@ -15,7 +13,7 @@ DECLARE
      */
      -- patch name should be the same as file name
     vt_patch_name CONSTANT TEXT   := '<%patch name%>';
-    vt_author     CONSTANT TEXT   := 'Andriy Senyshyn (sam@maytech.net)';  -- Patch author
+    vt_author     CONSTANT TEXT   := 'Andriy Senyshyn <asenyshyn@gmail.com>';  -- Patch author
 
     -- ! PUT REQUIRED PATCHES HERE
     va_depend_on           TEXT[] := ARRAY[]::TEXT[];
@@ -37,4 +35,3 @@ BEGIN
 
 END;
 $BODY$;
-

@@ -2,21 +2,13 @@
 -- set search path, drop recreatable objects
 -- -----------------------------------------------------------------------------
 
-SET statement_timeout = 0;
-SET client_encoding = 'UTF8';
-SET standard_conforming_strings = off;
-SET check_function_bodies = false;
-SET client_min_messages = warning;
-SET escape_string_warning = off;
-
-
-SET search_path = public;
+SET search_path = audit, public;
 
 
 CREATE OR REPLACE FUNCTION public.tmp_drop_recreatable_objects()
 RETURNS INTEGER AS $BODY$
 DECLARE
-  vt_schema  TEXT[] NOT NULL DEFAULT array['public','audit'];
+  vt_schema  TEXT[] NOT NULL DEFAULT array['audit', 'public'];
   vt_curstmt TEXT;
   vi_count INTEGER NOT NULL DEFAULT 0;
   BEGIN
@@ -29,6 +21,7 @@ DECLARE
             and c.relnamespace = n.oid
             AND r.rulename != '_RETURN'
             AND n.nspname IN (SELECT quote_ident(unnest(vt_schema)))
+            AND NOT EXISTS (SELECT 1 FROM pg_depend d WHERE c.oid = d.objid AND d.deptype = 'e')
   LOOP
       RAISE NOTICE 'about to drop rule: %', vt_curstmt;
       EXECUTE vt_curstmt;
@@ -42,7 +35,8 @@ DECLARE
                INNER JOIN pg_namespace ns ON c.relnamespace = ns.oid
          WHERE c.relkind = 'v'  -- views
            AND ns.nspname IN (SELECT quote_ident(unnest(vt_schema)))
-           AND c.relname <> 'pg_stat_statements'
+           AND c.relname NOT IN ('pg_stat_statements', 'pg_buffercache')
+           AND NOT EXISTS (SELECT 1 FROM pg_depend d WHERE c.oid = d.objid AND d.deptype = 'e')
   LOOP
       RAISE NOTICE 'about to drop view: %', vt_curstmt;
       EXECUTE vt_curstmt;
@@ -59,6 +53,7 @@ DECLARE
                        INNER JOIN pg_namespace ns ON p.pronamespace = ns.oid
                  WHERE ns.nspname IN (SELECT quote_ident(unnest(vt_schema)))
                    AND t.typtype IN ('c','e','d')  -- only composite, enum, domain types used by functions
+                   AND NOT EXISTS (SELECT 1 FROM pg_depend d WHERE t.oid = d.objid AND d.deptype = 'e')
                ) disttyp
   LOOP
       RAISE NOTICE 'about to drop type: %', vt_curstmt;
@@ -75,13 +70,13 @@ DECLARE
           FROM pg_proc p
                INNER JOIN pg_namespace ns ON p.pronamespace = ns.oid
                INNER JOIN pg_type t ON p.prorettype = t.oid
-               inner join pg_language pl on p.prolang = pl.oid
+               INNER JOIN pg_language pl on p.prolang = pl.oid
          WHERE ns.nspname IN (SELECT quote_ident(unnest(vt_schema)))
            AND t.typname <> 'trigger' -- not trigger functions
-           and pl.lanname NOT IN ('c','internal')
-           and ns.nspname NOT LIKE 'pg_%'
-           and ns.nspname <> 'information_schema'
-           and p.proname NOT IN ('function_used_as_field_default')
+           AND pl.lanname NOT IN ('c','internal')
+           AND ns.nspname NOT LIKE 'pg_%'
+           AND ns.nspname <> 'information_schema'
+           AND NOT EXISTS (SELECT 1 FROM pg_depend d WHERE p.oid = d.objid AND d.deptype = 'e')
          ORDER BY p.proisagg DESC, ns.nspname  -- aggregates first !
   LOOP
       RAISE NOTICE 'about to drop function: %', vt_curstmt;
@@ -98,6 +93,7 @@ DECLARE
                INNER JOIN pg_type t ON p.prorettype = t.oid
          WHERE ns.nspname IN (SELECT quote_ident(unnest(vt_schema)))
            AND t.typname = 'trigger' -- only trigger functions
+           AND NOT EXISTS (SELECT 1 FROM pg_depend d WHERE p.oid = d.objid AND d.deptype = 'e')
   LOOP
       RAISE NOTICE 'about to drop trigger function: %', vt_curstmt;
       EXECUTE vt_curstmt;

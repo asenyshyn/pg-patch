@@ -1,11 +1,8 @@
 # default configuration to apply latest changes with db ./run.sh
 
-# Script action
-PATCH=1   # 0 = off, 1 = on
-# INSTALL=0 # 0 = off, 1 = on
 
 # Connection settings
-DBUSER='postgres'
+DBUSER='demodb_owner'
 DBHOST='127.0.0.1'
 DATABASE='demodb'
 DBPORT=5432

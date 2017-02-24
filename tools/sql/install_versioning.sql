@@ -1,5 +1,3 @@
-BEGIN;
-
 -- This file adds versioning support to database it will be loaded to.
 -- It requires that PL/pgSQL is already loaded - will raise exception otherwise.
 -- All versioning "stuff" (tables, functions) is in "_v" schema.
@@ -9,6 +7,31 @@ BEGIN;
 
 CREATE SCHEMA _v;
 COMMENT ON SCHEMA _v IS 'Schema for versioning data and functionality.';
+
+CREATE TABLE _v.application_name(
+    name text not null
+);
+
+CREATE UNIQUE INDEX application_name_1_row ON _v.application_name((name IS NOT NULL));
+
+CREATE OR REPLACE FUNCTION _v.application_name_delete_prohibit()
+RETURNS trigger
+AS $$
+BEGIN
+    RAISE EXCEPTION '%', 'Removing application name is not allowed';
+END;
+$$
+LANGUAGE plpgsql;
+
+CREATE TRIGGER application_name_delete_trg
+BEFORE DELETE ON _v.application_name
+FOR EACH ROW
+EXECUTE PROCEDURE _v.application_name_delete_prohibit();
+
+CREATE TRIGGER application_name_truncate_trg
+BEFORE TRUNCATE ON _v.application_name
+FOR EACH STATEMENT
+EXECUTE PROCEDURE _v.application_name_delete_prohibit();
 
 CREATE TABLE _v.patch_history (
 patch_date timestamp NOT NULL DEFAULT now(),
@@ -82,7 +105,7 @@ BEGIN
     END IF;
 
     INSERT INTO _v.patches (patch_name, applied_ts, author, applied_by, applied_from, requires, conflicts )
-           VALUES ( in_patch_name, now(), in_author, current_user, inet_client_addr(), coalesce( in_requirements, '{}' ), coalesce( in_conflicts, '{}' ) );
+           VALUES ( in_patch_name, now(), in_author, current_user, COALESCE(inet_client_addr(),'0.0.0.0'::inet), coalesce( in_requirements, '{}' ), coalesce( in_conflicts, '{}' ) );
     RETURN TRUE;
 END;
 $$ language plpgsql;
@@ -124,5 +147,3 @@ BEGIN
 END;
 $$ language plpgsql;
 COMMENT ON FUNCTION _v.unregister_patch( TEXT ) IS 'Function to unregister patches in database. Dies if the patch is not registered, or if unregistering it would break dependencies.';
-
-COMMIT;

@@ -1,7 +1,8 @@
 #!/bin/bash
 
+readonly DB_PATH="$( cd "$( dirname "$0" )" && pwd )"
+
 DBNAME='';
-BASE_PATH="$( cd "$( dirname "$0" )" && pwd )"
 LOAD_BASE=0;
 DRY_RUN=0;
 
@@ -25,17 +26,17 @@ function grep_bin() {
 
 function get_module_path {
     local CODE_PATH=''
-    if [ -d "$BASE_PATH/code/views/$1/" ]; then
-        CODE_PATH="$CODE_PATH $BASE_PATH/code/views/$1/"
+    if [ -d "$DB_PATH/code/functions/$1/" ]; then
+        CODE_PATH="$CODE_PATH $DB_PATH/code/functions/$1/"
     fi
-    if [ -d "$BASE_PATH/code/functions/$1/" ]; then
-        CODE_PATH="$CODE_PATH $BASE_PATH/code/functions/$1/"
+    if [ -d "$DB_PATH/code/views/$1/" ]; then
+        CODE_PATH="$CODE_PATH $DB_PATH/code/views/$1/"
     fi
-    if [ -d "$BASE_PATH/code/rules/$1/" ]; then
-        CODE_PATH="$CODE_PATH $BASE_PATH/code/rules/$1/"
+    if [ -d "$DB_PATH/code/rules/$1/" ]; then
+        CODE_PATH="$CODE_PATH $DB_PATH/code/rules/$1/"
     fi
-    if [ -d "$BASE_PATH/code/triggers/$1/" ]; then
-        CODE_PATH="$CODE_PATH $BASE_PATH/code/triggers/$1/"
+    if [ -d "$DB_PATH/code/triggers/$1/" ]; then
+        CODE_PATH="$CODE_PATH $DB_PATH/code/triggers/$1/"
     fi
 
     echo $CODE_PATH
@@ -55,37 +56,35 @@ function install_modules {
 
 }
 
-function load_schema() {
-    # load initial dump
-    sed_bin 's/^\xEF\xBB\xBF//' $BASE_PATH/init/schema.sql
-    # load initial data
-    sed_bin 's/^\xEF\xBB\xBF//' $BASE_PATH/init/default_data.sql
-    sed_bin 's/^\xEF\xBB\xBF//' $BASE_PATH/init/data.sql
+function load_permissions() {
+    sed_bin 's/^\xEF\xBB\xBF//' $DB_PATH/init/permissions.sql
 }
 
-function load_permissions() {
-    sed_bin 's/^\xEF\xBB\xBF//' $BASE_PATH/init/permissions.sql
+function load_versioning() {
+    sed_bin 's/^\xEF\xBB\xBF//' $DB_PATH/tools/sql/install_versioning.sql
 }
 
 function load_patches() {
     # before patch. drop recreatable objects
-    sed_bin 's/^\xEF\xBB\xBF//' $BASE_PATH/tools/before_patch.sql
+    sed_bin 's/^\xEF\xBB\xBF//' $DB_PATH/tools/sql/before_patch.sql
 
     echo
     echo "-- apply patches --"
     echo
     # apply incremental changes
-    tools/list-dependencies-from-patches.sh patches/*.sql \
+    $DB_PATH/tools/sh/list-dependencies-from-patches.sh $DB_PATH/patches/*.sql \
         | tsort \
         | sed_bin '1!G;h;$!d' \
-        | xargs -I{} cat patches/{}.sql
+        | xargs -I{} cat $DB_PATH/patches/{}.sql
 
     # after patch
-    sed_bin 's/^\xEF\xBB\xBF//' $BASE_PATH/tools/after_patch.sql
+    sed_bin 's/^\xEF\xBB\xBF//' $DB_PATH/tools/sql/after_patch.sql
 }
 
 function lock_for_patch(){
-    # get repository revision global ID and branch name
+
+    sed_bin 's/^\xEF\xBB\xBF//' $DB_PATH/tools/sql/header.sql
+
     # get repository revision global ID and branch name
     #if git
     if hash git 2> /dev/null &&  git rev-parse --git-dir > /dev/null 2>&1 ; then
@@ -107,6 +106,10 @@ function lock_for_patch(){
     # start transaction
     echo "BEGIN;"
     echo
+
+    if [ $LOAD_BASE -eq 1 ]; then
+        load_versioning
+    fi
 
     # Thanks to this we know only one patch will be applied at a time
     echo "LOCK TABLE _v.patches IN EXCLUSIVE MODE;"
@@ -132,11 +135,6 @@ done
 
 # get version information and lock patch table
 lock_for_patch
-
-# load initial schema dump
-if [ $LOAD_BASE -eq 1 ]; then
-    load_schema
-fi
 
 # load patches. drop recreatable obejcts and make schema/data changes
 load_patches

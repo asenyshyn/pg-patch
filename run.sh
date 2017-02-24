@@ -3,27 +3,20 @@
 set -e
 
 readonly PROGNAME=$(basename $0)
+readonly DB_PATH="$( cd "$( dirname "$0" )" && pwd )"
 readonly ARGS="$@"
 readonly ARGC="$#"
 
 # default parameters
-PATCH=0
-INSTALL=0
-INSTALL_ARG=''
-ENCODING_AGR=''
+PATCH=
+INSTALL=
 
 DBUSER=''
 DBHOST=''
 DATABASE=''
-DBPORT=5432
-DBPORT_ARG=''
+DBPORT=''
 
 SILENT=0
-VERBOSE='-q'
-DRY_RUN=''
-
-CREATEDB=0
-CREATEROLES=''
 
 function grep_bin() {
     if [[ ${OSTYPE//[0-9.]} == "solaris" ]]; then
@@ -45,10 +38,10 @@ function help {
     cat <<EOF
 
 This is help for $PROGNAME script
-This is a helper script for updating and patching Postgresql database
+This is a helper script for updating and patching database
 
-Default options could be passed to $PROGNAME with config.cfg file.
-Example file could be found in config.cfg.default
+Default options could be passed to $PROGNAME with database.conf file.
+Example file could be found in database.conf.default
 
 Script will attempt to find repository information from git or hg repository.
 If none is found - script will look into file repo.info (see example repo.info.example)
@@ -56,10 +49,6 @@ If none is found - script will look into file repo.info (see example repo.info.e
 List of options:
 
  --help       - prints this message.
-
-Script flags:
- -P --patch   - patch database
- -I --install - install database. Will install versioning and all patches.
 
 Connection settings:
  -h --host <host>         - target host name
@@ -72,34 +61,12 @@ Behaviour flags
  -v --verbose - verbose mode. Will print all commands sent to database
  -0 --dry-run - dry run mode. Will rollback all changes in the end. Useful for testing.
 
-Database and roles flags:
- -C --create     - create target database. Action will be performed with
-                   user 'postgres' no matter what user you provide
- -r --roles      - create roles for demodb database if totally new installation.
-                   Action is performed as user 'postgres'
- -e --enc-ignore - ignore encoding settings in CREATE DATABASE statement.
-
 Usage examples:
- Create new database 'demodb_dev':
- ./run.sh -I -d demodb_dev -h localhost -U postgres -p 5432 -C
-
- Patch database 'demodb_dev':
- ./run.sh -P -d demodb_dev -h localhost -U postgres -p 5432 -s
-
- Test if your changes apply succesfuly:
- ./run.sh -P -d demodb_dev -h localhost -U postgres -p 5432 -s -0
+ ./run.sh -d demodb -h localhost -U demodb_owner -p 5432
+ ./run.sh -d demodb -h localhost -U demodb_owner -p 5432 -s
+ ./run.sh -c path/to/database.conf
 
 EOF
-}
-
-startup() {
-    if [ "$ARGC" == "0" ] && [ ! -f config.cfg ] ; then
-        help
-        exit
-    elif [ -f config.cfg ] ; then
-        . config.cfg
-        DBPORT_ARG="-p $DBPORT"
-    fi
 }
 
 function confirm_action {
@@ -114,18 +81,55 @@ function confirm_action {
                 echo "Please answer yes on no."
         esac
     done
+    return 0
 }
 
-args_parse() {
+function read_input() {
+    local default_val=$1
+    local message=$2
+    local input_val=$3
+
+    if [ "$input_val" = '' ]; then
+        [[ $SILENT -eq 0 ]] && read -p "$message" input_val
+        input_val=${input_val:-$default_val}
+    fi
+    echo $input_val
+}
+
+function read_config() {
+    local config=$1
+    local tmp_config="/tmp/sr_db.$$.conf"
+
+    if [ "$ARGC" == "0" ] && [ ! -f $config ] ; then
+        help
+        exit
+    elif [ -f $config ] ; then
+        # clear tmp file
+        :> $tmp_config
+        # remove dangerous stuff
+        sed -e 's/#.*$//g;s/;.*$//g;/^$/d' $config |
+            while read line
+            do
+                if echo $line | grep_bin -F = &>/dev/null
+                then
+                    echo "$line" >> $tmp_config
+                fi
+            done
+        . $tmp_config
+        rm $tmp_config
+    fi
+    return 0
+}
+
+function read_args() {
     local arg=
+
     for arg
     do
         local delim=""
         case "$arg" in
             #translate --gnu-long-options to -g (short options)
             --help)           help && exit 0;;
-            --patch)          args="${args}-P ";;
-            --install)        args="${args}-I ";;
             --host)           args="${args}-h ";;
             --port)           args="${args}-p ";;
             --database)       args="${args}-d ";;
@@ -134,203 +138,106 @@ args_parse() {
             --silent)         args="${args}-s ";;
             --verbose)        args="${args}-v ";;
             --test)           args="${args}-t ";;
-            --create)         args="${args}-C ";;
             --roles)          args="${args}-r ";;
-            --enc-ignore)     args="${args}-e ";;
             --debug)          args="${args}-x ";;
             --config)         args="${args}-c ";;
             #pass through anything else
             *) [[ "${arg:0:1}" == "-" ]] || delim="\""
-                args="${args}${delim}${arg}${delim} ";;
+               args="${args}${delim}${arg}${delim} ";;
         esac
     done
 
-    #Reset the positional parameters to the short options
+    # Reset the positional parameters to the short options
     eval set -- $args
 
     # read parameters
-    while getopts "PIh:d:U:p:sv0creCtx" optname
+    while getopts "PIc:h:d:U:p:sv0cretx" optname
     do
         case "$optname" in
-            "H")
-                help
-                exit
-                ;;
-            "P")
-                PATCH=1
-                ;;
-            "I")
-                INSTALL=1
-                INSTALL_ARG='-install'
-                ;;
-            "h")
-                DBHOST=$OPTARG
-                ;;
-            "d")
-                DATABASE=$OPTARG
-                ;;
-            "U")
-                DBUSER=$OPTARG
-                ;;
-            "p")
-                DBPORT=$OPTARG
-                DBPORT_ARG="-p $DBPORT"
-                ;;
-            "M")
-                MODULE=$OPTARG
-                ;;
-            "s")
-                SILENT=1
-                ;;
-            "v")
-                # echo all input from script
-                VERBOSE='-a'
-                ;;
-            "0")
-                DRY_RUN='-0'
-                ;;
-            "C")
-                CREATEDB=1
-                ;;
-            "r")
-                CREATEROLES='-r'
-                ;;
-            "e")
-                ENCODING_AGR='-e'
-                ;;
-            "?")
-                echo "Unknown option $OPTARG"
-                ;;
-            ":")
-                echo "No argument value for option $OPTARG"
-                ;;
-            *)
-                echo "Unknown error while processing options"
-                ;;
+            "H") help && exit 0 ;;
+            "c") v_config=$OPTARG;;
+            "h") v_host=$OPTARG ;;
+            "d") v_db=$OPTARG ;;
+            "U") v_dbuser=$OPTARG ;;
+            "p") v_port=$OPTARG ;;
+            "s") SILENT=1 ;;
+            "v") v_verbose='-a' ;;
+            "0") v_dry_run='-0' ;;
+            "r") v_create_roles='-r' ;;
+            "?") echo "Unknown option $OPTARG" ;;
+            ":") echo "No argument value for option $OPTARG" ;;
+            *) echo "Unknown error while processing options" ;;
         esac
     done
-
     return 0
 }
 
-args_process() {
+function args_process() {
+
+    # Defaults for messages
+    local hostname=''
+    local port='5432'
+    local dbname='demodb'
+    local dbuser='demodb_owner'
+
     # process parameters
 
-    #do not use patch and install options at the same time
-    if [ $PATCH -eq 1 ] && [ $INSTALL -eq 1 ]; then
-        echo "Please decide do you want to patch or install."
-        exit
-    fi
-
-    if [ $INSTALL -ne 1 ] && [ $CREATEDB -eq 1 ]; then
-        echo "Cannot create new database if install is not performed."
-        exit
-    fi
-
-    #if none was supplied - patch db
-    if [ $PATCH -eq 0 ] && [ $INSTALL -eq 0 ]; then
-        echo "Patching database (no action was specified)."
-        confirm_action
-        PATCH=1
-    fi
-
     # server host
-    if [ "$DBHOST" = '' ]; then
-        if [ $SILENT -eq 0 ]; then
-            read -p "Enter destination hostname [127.0.0.1]: " DBHOST
-            DBHOST=${DBHOST:-127.0.0.1}
-        else
-            DBHOST='127.0.0.1'
-        fi
-    fi
+    v_host=$(read_input "$hostname" "Enter destination hostname [$hostname]: " ${v_host:-$DBHOST})
+
+    # server port
+    v_port=$(read_input "$port" "Enter destination port [$port]: " ${v_port:-$DBPORT})
 
     # database
-    if [ "$DATABASE" = '' ]; then
-        if [ $SILENT -eq 0 ]; then
-            read -p "Enter destination database [demodb]: " DATABASE
-            DATABASE=${DATABASE:-demodb}
-        else
-            DATABASE='demodb'
-        fi
-    fi
+    v_db=$(read_input "$dbname" "Enter destination database [$dbname]: " ${v_db:-$DATABASE})
 
     # database user
-    if [ "$DBUSER" = '' ]; then
-        if [ $SILENT -eq 0 ]; then
-            read -p "Enter database username [postgres]: " DBUSER
-            DBUSER=${DBUSER:-postgres}
-        else
-            DBUSER='postgres'
-        fi
-    fi
-
-    # write parameters back to user and ask for confirmation
-    if [ $INSTALL -eq 1 ]; then
-        echo "You are going to INSTALL database to database $DATABASE at host $DBHOST"
-    fi
-
-    if [ $PATCH -eq 1 ]; then
-        echo "You are going to PATCH database $DATABASE at host $DBHOST"
-    fi
+    v_dbuser=$(read_input "$dbuser" "Enter destination user [$dbuser]: " ${v_dbuser:-$DBUSER})
 
     cat <<EOF
-  Using host:     $DBHOST
-  Using database: $DATABASE
-  Using username: $DBUSER
-  Using port:     $DBPORT
+You are going to apply changes to
+  host:     $v_host
+  database: $v_db
+  username: $v_dbuser
+  port:     $v_port
 
 EOF
 
-    if [ $SILENT -eq 0 ]; then
-        confirm_action
-    fi
+    [[ $SILENT -eq 0 ]] && confirm_action
+    return 0
 }
 
-run_actions() {
-    # create target database
-    if [ $CREATEDB -eq 1 ]  && [ $INSTALL -eq 1 ]; then
-        echo "You are going to create database $DATABASE on host $DBHOST."
-        if [ $SILENT -eq 0 ]; then
-            confirm_action
-        fi
-        echo "Creating database $DATABASE ..."
-        ./create_db.sh -d $DATABASE $CREATEROLES $ENCODING_AGR \
-            | psql -X $VERBOSE -v ON_ERROR_STOP=1 --pset pager=off -h $DBHOST $DBPORT_ARG -U postgres -d postgres
+function run_actions() {
+    local dbhost=''
+    local dbport=''
+    local patch_action=''
+    local dbinstall=''
 
-        if test $? -eq 0
-        then
-            echo "Done."
-        else
-            echo "Failed to create database."
-            exit
-        fi
-        echo
+    if [ "$v_host" != '' ]; then
+        dbhost="-h $v_host"
     fi
 
-    # install versioning if INSTALL
-    if [ $INSTALL -eq 1 ]; then
-        echo "Installing versioning..."
-        psql -X $VERBOSE -v ON_ERROR_STOP=1 --pset pager=off -h $DBHOST -d $DATABASE $DBPORT_ARG -U $DBUSER -f tools/install_versioning.sql
-        if test $? -eq 0
-        then
-            echo "Done."
-        else
-            echo "Failed to install versioning"
-            exit
-        fi
-        echo
-        echo "Installing..."
+    if [ "$v_port" != '' ]; then
+        dbport="-p $v_port"
     fi
 
-    # Patch
-    if [ $PATCH -eq 1 ]; then
-        echo "Patching..."
-    fi
+    echo "Checking database..."
+    patch_action=$(psql -tXq $dbhost $dbport -d $v_db -U $v_dbuser -f tools/sql/db_check.sql  -v appname='demodb' | tr -d '[[:space:]]')
 
-    # do the magic
-    ./generate_sql.sh $INSTALL_ARG $DRY_RUN |
-        psql -X $VERBOSE -v ON_ERROR_STOP=1 --pset pager=off -h $DBHOST -d $DATABASE $DBPORT_ARG -U $DBUSER 2>&1 |
-        if [ "$VERBOSE" = '-a' ]; then \
+    if [ "$patch_action" = 'I' ] ; then
+        echo "Empty database. Will perform install"
+        dbinstall='-install'
+    elif [ "$patch_action" = 'P' ] ; then
+        echo "Application and patches found. Will perform patch"
+    else
+        echo "Database preconditions failed."
+        exit
+    fi
+    echo "Applying changes..."
+
+    $DB_PATH/generate_sql.sh $dbinstall $v_dry_run |
+        psql -X $v_verbose -v ON_ERROR_STOP=1 --pset pager=off $dbhost -d $v_db $dbport -U $v_dbuser 2>&1 |
+        if [ "$v_verbose" = '-a' ]; then \
             cat; \
         else \
             grep_bin -E 'WARNING|ERROR|FATAL' | sed_bin 's/WARNING: //'; \
@@ -341,16 +248,33 @@ run_actions() {
         echo "Done."
     else
         echo "Failed to perform actions. Check parameters that you passed."
-        exit
+        exit ${PIPESTATUS[1]}
     fi
     echo
 
+    return 0
 }
 
-main() {
-    startup
-    args_parse $ARGS
+function main() {
+    # define variables and default values
+    local v_host=''
+    local v_db=''
+    local v_dbuser=''
+    local v_port=''
+    local v_verbose='-q'
+    local v_dry_run=''
+    local v_create_roles=''
+    local v_config="$DB_PATH/database.conf"
+
+    # get and parse arguments
+    read_args $ARGS
+
+    # get values from config file
+    read_config $v_config
+
+    # process command line parameters and config values
     args_process
+
     run_actions
 }
 
